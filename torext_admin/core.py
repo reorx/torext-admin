@@ -6,15 +6,16 @@ import functools
 import logging
 import datetime
 import urllib
+import urlparse
 from torext import errors, params, settings
-from torext.utils import ObjectDict, _json
+from torext.utils import ObjectDict
 from torext.handlers import BaseHandler
 
 
 PRIVILEGES = {}
 
 
-str_abbr = lambda x: '..' + str(x)[-5:]
+abbr = lambda x: '..' + str(x)[-5:]
 
 
 class AdminHandler(BaseHandler):
@@ -29,13 +30,14 @@ class AdminHandler(BaseHandler):
 
     AUTH_REQUIRED = True
 
-    def prepare(self):
+    PREPARES = ['basic']
+
+    def prepare_basic(self):
         """
         Because every page requires strict authority of privileges,
         we do authentication using `prepare` method instead of `authenticate` decorator,
         """
         context = {}
-        context.setdefault('blackbox', ObjectDict())
         context.setdefault('notice', None)
         context.setdefault('notice_class', 'info')
         context.setdefault('user', getattr(self, 'user', None))
@@ -49,17 +51,18 @@ class AdminHandler(BaseHandler):
                 raise errors.OperationNotAllowed('User group has no access to this page')
 
     def get_template_namespace(self):
+        """Overwrite default method to add extra template functions
+        """
         ns = super(BaseHandler, self).get_template_namespace()
         ns.update(
-            str_abbr=str_abbr,
-            to_json=_json
+            abbr=abbr,
         )
         return ns
 
     def redirect_login(self, e):
-        self.redirect('/users/login?%s' % urllib.urlencode(dict(next=self.request.uri)))
+        self.redirect('/users/login?%s' % urllib.urlencode({'next': self.request.uri}))
 
-    def page_redirect(self, notice, notice_class='info', status=None, uri=None):
+    def render_redirect_page(self, notice, notice_class='info', status=None, uri=None):
         if status:
             self.set_status(status)
         self.context.update(
@@ -68,14 +71,11 @@ class AdminHandler(BaseHandler):
             redirect=uri or self.request.uri)
         self.render('redirect.html')
 
-    def error_redirect_back(self, e):
-        self.page_redirect(str(e), 'error', 401)
-
-    def render_error(self, e):
+    def render_error(self, e, in_page=True):
         self.context.update(
             notice=str(e),
             notice_class='error')
-        if hasattr(self, 'render_page'):
+        if in_page:
             self.render_page()
         else:
             self.render('base-layout.html')
@@ -92,7 +92,29 @@ class AdminHandler(BaseHandler):
         self.render('base-layout.html')
 
 
-class ResourceHandler(BaseHandler):
+class Pagination(object):
+    def __init__(self, cursor, uri):
+        parsed_uri = urlparse.urlparse(uri)
+        self.base_uri = parsed_uri.path
+        self.query = urlparse.parse_qs(parsed_uri.query)
+        # No page argument means the 1st page
+        self.current_page = self.query.get('p', 1)
+
+        count = cursor.count()
+        if count == 0:
+            page_count = 1
+        else:
+            page_count = (count / settings['RESOURCE_PAGE_LIMIT']) +\
+                (1 if count % settings['RESOURCE_PAGE_LIMIT'] else 0)
+        self.page_count = page_count
+
+    def get_uri(self, page_number):
+        query = self.query.copy()
+        query['p'] = str(page_number)
+        return '%s?%s' % (self.base_uri, urllib.urlencode(query))
+
+
+class ResourceHandler(AdminHandler):
     @property
     def Model(self):
         raise NotImplementedError
@@ -119,6 +141,10 @@ class ResourceHandler(BaseHandler):
             Model=self.Model,
             Table=self.Table,
             Form=self.Form)
+
+    def get_pagination(self, cursor):
+        pagi = ObjectDict()
+        return pagi
 
     def parse_arguments(self):
         current = self.get_argument('p', 1)
@@ -162,28 +188,6 @@ class ResourceHandler(BaseHandler):
 
     def get_sort_query_args(self):
         return [(k, 1 if v == 'asc' else -1) for k, v in self._sort_query.iteritems()]
-
-    def get_pagination(self, cursor):
-        pagi = ObjectDict()
-
-        base_uri = re.sub('\?p=\d+(&)?', '', self.request.uri)
-        base_uri = re.sub('&p=\d+', '', base_uri)
-        # print 'base uri with `p`', base_uri
-        if re.search('\?\w+=', base_uri):
-            base_uri += '&'
-        else:
-            base_uri += '?'
-        count = cursor.count()
-        if count == 0:
-            total = 1
-        else:
-            total = (count / settings['RESOURCE_PAGE_LIMIT']) +\
-                (1 if count % settings['RESOURCE_PAGE_LIMIT'] else 0)
-
-        pagi.base_uri = base_uri
-        pagi.current = self.current_page
-        pagi.total = total
-        return pagi
 
     def get_cursor(self):
         query_args = self.get_query_args()
