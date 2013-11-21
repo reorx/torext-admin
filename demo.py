@@ -51,13 +51,58 @@ class ResourceTable(core.t.Table):
 core.register(Resource,
               search=ResourceSearch,
               table=ResourceTable,
-              create=ResourceCreateForm,
-              update=ResourceUpdateForm,
-              create_and_update=ResourceForm)
+              form=ResourceForm,
+              create_form=ResourceCreateForm,
+              update_form=ResourceUpdateForm)
 
 # Or
 
 class ResourceAdmin(core.Admin):
+    form = ResourceForm
     create_form = ResourceCreateForm
     update_form = ResourceUpdateForm
-    create_and_update = ResourceForm
+    table = ResourceTable
+
+
+## Form
+
+class ResourceForm(core.f.Form):
+    Model = Resource
+
+    fields = ['name', 'is_open']
+    exclude_fields = ['created']
+    required_fields = ['name']
+
+    def process(self, id, params):
+        if id is None:
+            self.process_create(params)
+        else:
+            self.process_update(id, params)
+
+    def process_create(self, params):
+        ins = self.Model(**params)
+        ins.save()
+
+    def process_update(self, id, params):
+        self.object_setter(self.object_getter(id), params)
+
+    def object_getter(self, id):
+        return self.Model.get(id)
+
+    def object_setter(self, ins, params):
+        for k, v in params.iteritems():
+            setattr(ins, key, value)
+        ins.save()
+
+
+class ResourceCreateForm(ResourceForm):
+    def process_create(self, params):
+        ins = self.Model(**params)
+        ins.save()
+
+
+class ResourceUpdateForm(ResourceForm):
+
+    def process_update(self, id, params):
+        ins = self.object_getter(id)
+        self.object_setter(ins, params)
